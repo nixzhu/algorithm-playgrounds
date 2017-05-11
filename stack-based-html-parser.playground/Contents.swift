@@ -93,6 +93,10 @@ func tokenize(_ htmlString: String) -> [Token] {
     var tokens: [Token] = []
     var remainder = htmlString.characters
     while true {
+        guard !remainder.isEmpty else {
+            break
+        }
+        let remainderLength = remainder.count
         if let (token, newRemainder) = plainText(remainder) {
             tokens.append(token)
             remainder = newRemainder
@@ -121,7 +125,8 @@ func tokenize(_ htmlString: String) -> [Token] {
             tokens.append(token)
             remainder = newRemainder
         }
-        if remainder.isEmpty { // TODO
+        let newRemainderLength = remainder.count
+        guard newRemainderLength < remainderLength else {
             break
         }
     }
@@ -266,7 +271,7 @@ func parse(_ tokens: [Token]) -> Value {
 }
 
 //let htmlString = "hello<b>world<i>!</i></b>"
-let htmlString = "<p>hello<b>world<i>!</i></b></p>"
+let htmlString = "<p>hello <b>world</b><i>!</i></p><p><b>OK</b></p>"
 let tokens = tokenize(htmlString)
 print("tokens: \(tokens)")
 let value = parse(tokens)
