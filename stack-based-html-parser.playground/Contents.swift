@@ -67,6 +67,48 @@ func map<A, B>(_ parser: @escaping Parser<A>, _ transform: @escaping (A) -> B) -
     }
 }
 
+func one<A>(of parsers: [Parser<A>]) -> Parser<A> {
+    return { stream in
+        for parser in parsers {
+            if let x = parser(stream) {
+                return x
+            }
+        }
+        return nil
+    }
+}
+
+func or<A>(_ leftParser: @escaping Parser<A>, _ rightParser: @escaping Parser<A>) -> Parser<A> {
+    return { stream in
+        return leftParser(stream) ?? rightParser(stream)
+    }
+}
+
+func between<A, B, C>(_ a: @escaping Parser<A>, _ b: @escaping Parser<B>, _ c: @escaping Parser<C>) -> Parser<B> {
+    return { stream in
+        guard let (_, remainder1) = a(stream) else { return nil }
+        guard let (result2, remainder2) = b(remainder1) else { return nil }
+        guard let (_, remainder3) = c(remainder2) else { return nil }
+        return (result2, remainder3)
+    }
+}
+
+func eatLeft<A, B>(_ left: @escaping Parser<A>, _ right: @escaping Parser<B>) -> Parser<B> {
+    return { stream in
+        guard let (_, remainder1) = left(stream) else { return nil }
+        guard let (result2, remainder2) = right(remainder1) else { return nil }
+        return (result2, remainder2)
+    }
+}
+
+func eatRight<A, B>(_ left: @escaping Parser<A>, _ right: @escaping Parser<B>) -> Parser<A> {
+    return { stream in
+        guard let (result1, remainder1) = left(stream) else { return nil }
+        guard let (_, remainder2) = right(remainder1) else { return nil }
+        return (result1, remainder2)
+    }
+}
+
 enum Token {
     case plainText(string: String)
     case beginBoldTag
@@ -75,8 +117,22 @@ enum Token {
     case endItalicTag
     case beginParagraphTag
     case endParagraphTag
+    case beginAnchorTag(href: String)
+    case endAnchorTag
 }
 
+let spaces: Parser<String> = {
+    let space = one(of: [
+        character(" "),
+        character("\0"),
+        character("\t"),
+        character("\r"),
+        character("\n"),
+        ]
+    )
+    let spaceString = map(space) { String($0) }
+    return map(many(or(spaceString, word("\r\n")))) { $0.joined() }
+}()
 let plainText: Parser<Token> = {
     let letter = satisfy({ $0 != "<" && $0 != ">" })
     let string = map(many1(letter)) { String($0) }
@@ -88,6 +144,29 @@ let beginItalicTag: Parser<Token> = map(word("<i>")) { _ in .beginItalicTag }
 let endItalicTag: Parser<Token> = map(word("</i>")) { _ in .endItalicTag }
 let beginParagraphTag: Parser<Token> = map(word("<p>")) { _ in .beginParagraphTag }
 let endParagraphTag: Parser<Token> = map(word("</p>")) { _ in .endParagraphTag }
+let beginAnchorTag: Parser<Token> = {
+    let head = eatRight(word("<a"), spaces)
+    let quotedString: Parser<String> = {
+        let unescapedCharacter = satisfy({ $0 != "\\" && $0 != "\"" })
+        let escapedCharacter = one(of: [
+            map(word("\\\"")) { _ in Character("\"") },
+            map(word("\\\\")) { _ in Character("\\") },
+            map(word("\\/")) { _ in Character("/") },
+            map(word("\\n")) { _ in Character("\n") },
+            map(word("\\r")) { _ in Character("\r") },
+            map(word("\\t")) { _ in Character("\t") },
+            ]
+        )
+        let letter = one(of: [unescapedCharacter, escapedCharacter])
+        let _string = map(many(letter)) { String($0) }
+        let quote = character("\"")
+        return between(quote, _string, quote)
+    }()
+    let href = eatLeft(word("href="), quotedString)
+    let tail = eatLeft(spaces, word(">"))
+    return map(between(head, href, tail)) { .beginAnchorTag(href: $0) }
+}()
+let endAnchorTag: Parser<Token> = map(word("</a>")) { _ in .endAnchorTag }
 
 func tokenize(_ htmlString: String) -> [Token] {
     var tokens: [Token] = []
@@ -125,6 +204,14 @@ func tokenize(_ htmlString: String) -> [Token] {
             tokens.append(token)
             remainder = newRemainder
         }
+        if let (token, newRemainder) = beginAnchorTag(remainder) {
+            tokens.append(token)
+            remainder = newRemainder
+        }
+        if let (token, newRemainder) = endAnchorTag(remainder) {
+            tokens.append(token)
+            remainder = newRemainder
+        }
         let newRemainderLength = remainder.count
         guard newRemainderLength < remainderLength else {
             break
@@ -138,6 +225,7 @@ indirect enum Value {
     case boldTag(value: Value)
     case italicTag(value: Value)
     case paragraphTag(value: Value)
+    case anchorTag(href: String, value: Value)
     case sequence(values: [Value])
 }
 
@@ -250,6 +338,30 @@ func parse(_ tokens: [Token]) -> Value {
             } else {
                 stack.push(.value(.paragraphTag(value: .sequence(values: elements.reversed().map({ $0.value }).flatMap({ $0 })))))
             }
+        case .beginAnchorTag(let href):
+            stack.push(.token(.beginAnchorTag(href: href)))
+        case .endAnchorTag:
+            var elements: [Element] = []
+            var href = ""
+            while let element = stack.pop() {
+                if case .token(let value) = element {
+                    if case .beginAnchorTag(let _href) = value {
+                        href = _href
+                        break
+                    }
+                }
+                elements.append(element)
+            }
+            if elements.count == 1 {
+                let element = elements[0]
+                if let value = element.value {
+                    stack.push(.value(.anchorTag(href: href, value: value)))
+                } else {
+                    print("todo: \(elements)")
+                }
+            } else {
+                stack.push(.value(.anchorTag(href: href, value: .sequence(values: elements.reversed().map({ $0.value }).flatMap({ $0 })))))
+            }
         }
         return true
     }
@@ -271,7 +383,7 @@ func parse(_ tokens: [Token]) -> Value {
 }
 
 //let htmlString = "hello<b>world<i>!</i></b>"
-let htmlString = "<p>hello <b>world</b><i>!</i></p><p><b>OK</b></p>"
+let htmlString = "<p>hello <b>world</b><i>!</i></p><p><b>OK</b></p><a href=\"https://www.apple.com\">apple</a>"
 let tokens = tokenize(htmlString)
 print("tokens: \(tokens)")
 let value = parse(tokens)
