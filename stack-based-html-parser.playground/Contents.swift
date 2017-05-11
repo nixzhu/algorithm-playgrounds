@@ -3,14 +3,6 @@
  * @nixzhu (zhuhongxu@gmail.com)
  */
 
-enum Token {
-    case plainText(string: String)
-    case beginBoldTag
-    case endBoldTag
-    case beginItalicTag
-    case endItalicTag
-}
-
 typealias Stream = String.CharacterView
 typealias Parser<A> = (Stream) -> (A, Stream)?
 
@@ -75,6 +67,16 @@ func map<A, B>(_ parser: @escaping Parser<A>, _ transform: @escaping (A) -> B) -
     }
 }
 
+enum Token {
+    case plainText(string: String)
+    case beginBoldTag
+    case endBoldTag
+    case beginItalicTag
+    case endItalicTag
+    case beginParagraphTag
+    case endParagraphTag
+}
+
 let plainText: Parser<Token> = {
     let letter = satisfy({ $0 != "<" && $0 != ">" })
     let string = map(many1(letter)) { String($0) }
@@ -84,6 +86,8 @@ let beginBoldTag: Parser<Token> = map(word("<b>")) { _ in .beginBoldTag }
 let endBoldTag: Parser<Token> = map(word("</b>")) { _ in .endBoldTag }
 let beginItalicTag: Parser<Token> = map(word("<i>")) { _ in .beginItalicTag }
 let endItalicTag: Parser<Token> = map(word("</i>")) { _ in .endItalicTag }
+let beginParagraphTag: Parser<Token> = map(word("<p>")) { _ in .beginParagraphTag }
+let endParagraphTag: Parser<Token> = map(word("</p>")) { _ in .endParagraphTag }
 
 func tokenize(_ htmlString: String) -> [Token] {
     var tokens: [Token] = []
@@ -109,7 +113,15 @@ func tokenize(_ htmlString: String) -> [Token] {
             tokens.append(token)
             remainder = newRemainder
         }
-        if remainder.isEmpty {
+        if let (token, newRemainder) = beginParagraphTag(remainder) {
+            tokens.append(token)
+            remainder = newRemainder
+        }
+        if let (token, newRemainder) = endParagraphTag(remainder) {
+            tokens.append(token)
+            remainder = newRemainder
+        }
+        if remainder.isEmpty { // TODO
             break
         }
     }
@@ -120,6 +132,7 @@ indirect enum Value {
     case plainText(string: String)
     case boldTag(value: Value)
     case italicTag(value: Value)
+    case paragraphTag(value: Value)
     case sequence(values: [Value])
 }
 
@@ -210,6 +223,28 @@ func parse(_ tokens: [Token]) -> Value {
             } else {
                 stack.push(.value(.italicTag(value: .sequence(values: elements.reversed().map({ $0.value }).flatMap({ $0 })))))
             }
+        case .beginParagraphTag:
+            stack.push(.token(.beginParagraphTag))
+        case .endParagraphTag:
+            var elements: [Element] = []
+            while let element = stack.pop() {
+                if case .token(let value) = element {
+                    if case .beginParagraphTag = value {
+                        break
+                    }
+                }
+                elements.append(element)
+            }
+            if elements.count == 1 {
+                let element = elements[0]
+                if let value = element.value {
+                    stack.push(.value(.paragraphTag(value: value)))
+                } else {
+                    print("todo: \(elements)")
+                }
+            } else {
+                stack.push(.value(.paragraphTag(value: .sequence(values: elements.reversed().map({ $0.value }).flatMap({ $0 })))))
+            }
         }
         return true
     }
@@ -231,7 +266,7 @@ func parse(_ tokens: [Token]) -> Value {
 }
 
 //let htmlString = "hello<b>world<i>!</i></b>"
-let htmlString = "<b>hello<b>world<i>!</i></b></b>"
+let htmlString = "<p>hello<b>world<i>!</i></b></p>"
 let tokens = tokenize(htmlString)
 print("tokens: \(tokens)")
 let value = parse(tokens)
