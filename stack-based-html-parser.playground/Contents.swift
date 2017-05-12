@@ -171,46 +171,25 @@ let endAnchorTag: Parser<Token> = map(word("</a>")) { _ in .endAnchorTag }
 func tokenize(_ htmlString: String) -> [Token] {
     var tokens: [Token] = []
     var remainder = htmlString.characters
+    let parsers = [
+        plainText,
+        beginBoldTag,
+        endBoldTag,
+        beginItalicTag,
+        endItalicTag,
+        beginParagraphTag,
+        endParagraphTag,
+        beginAnchorTag,
+        endAnchorTag
+    ]
     while true {
-        guard !remainder.isEmpty else {
-            break
-        }
+        guard !remainder.isEmpty else { break }
         let remainderLength = remainder.count
-        if let (token, newRemainder) = plainText(remainder) {
-            tokens.append(token)
-            remainder = newRemainder
-        }
-        if let (token, newRemainder) = beginBoldTag(remainder) {
-            tokens.append(token)
-            remainder = newRemainder
-        }
-        if let (token, newRemainder) = endBoldTag(remainder) {
-            tokens.append(token)
-            remainder = newRemainder
-        }
-        if let (token, newRemainder) = beginItalicTag(remainder) {
-            tokens.append(token)
-            remainder = newRemainder
-        }
-        if let (token, newRemainder) = endItalicTag(remainder) {
-            tokens.append(token)
-            remainder = newRemainder
-        }
-        if let (token, newRemainder) = beginParagraphTag(remainder) {
-            tokens.append(token)
-            remainder = newRemainder
-        }
-        if let (token, newRemainder) = endParagraphTag(remainder) {
-            tokens.append(token)
-            remainder = newRemainder
-        }
-        if let (token, newRemainder) = beginAnchorTag(remainder) {
-            tokens.append(token)
-            remainder = newRemainder
-        }
-        if let (token, newRemainder) = endAnchorTag(remainder) {
-            tokens.append(token)
-            remainder = newRemainder
+        for parser in parsers {
+            if let (token, newRemainder) = parser(remainder) {
+                tokens.append(token)
+                remainder = newRemainder
+            }
         }
         let newRemainderLength = remainder.count
         guard newRemainderLength < remainderLength else {
@@ -383,7 +362,7 @@ func parse(_ tokens: [Token]) -> Value {
 }
 
 //let htmlString = "hello<b>world<i>!</i></b>"
-let htmlString = "<p>hello <b>world</b><i>!</i></p><p><b>OK</b></p><a href=\"https://www.apple.com\">apple</a>"
+let htmlString = "<p>hello <b>world</b><i>!</i></p><p><b>OK</b></p><a href=\"https://www.apple.com\">apple.<b>com</b></a>"
 let tokens = tokenize(htmlString)
 print("tokens: \(tokens)")
 let value = parse(tokens)
